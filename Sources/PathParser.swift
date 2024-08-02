@@ -2,6 +2,10 @@
  * Using https://www.w3.org/TR/SVG11/paths.html#PathDataBNF because the SVG2 grammar is incorrect and weird.
  */
 
+// TODO:
+// - Error reporting
+// - How are we supposed to treat input that's partially parsable?
+
 public class PathParser {
     let stream: CharStream
 
@@ -10,6 +14,7 @@ public class PathParser {
     }
 
     static func parsePath(from input: String) -> Path? {
+        print("Parsing path: `\(input)`")
         let stream = CharStream(of: input)
         let parser = PathParser(stream: stream)
         return parser.parseSvgPath()
@@ -106,8 +111,31 @@ public class PathParser {
         //     | quadratic-bezier-curveto
         //     | smooth-quadratic-bezier-curveto
         //     | elliptical-arc
-        // TODO: Most of these!
-        return nil
+        return switch stream.peek() {
+        case "Z", "z":
+            if let closePath = parseClosePath() {
+                [closePath]
+            } else {
+                nil
+            }
+        case "L", "l":
+            parseLineTo()
+        case "H", "h":
+            parseHorizontalLineTo()
+        case "V", "v":
+            parseVerticalLineTo()
+        case "C", "c":
+            parseCurveTo()
+        case "S", "s":
+            parseSmoothCurveTo()
+        case "Q", "q":
+            parseQuadraticBezierCurveTo()
+        case "T", "t":
+            parseSmoothQuadraticBezierCurveTo()
+        case "A", "a":
+            parseEllipticalArc()
+        default: nil
+        }
     }
 
     private func parseMoveTo() -> [PathCommand]? {
@@ -123,23 +151,286 @@ public class PathParser {
             }
             let relative = m == "m"
             let _ = parseWsp()
-            guard let firstCoordinatePair = parseCoordinatePair() else {
+            return parseArgumentSequence {
+                if let coordinatePair = parseCoordinatePair() {
+                    return PathCommand.Move(relative: relative, coordinatePair)
+                }
                 return nil
             }
-            var moveToCommands: [PathCommand] = [PathCommand.Move(relative: relative, firstCoordinatePair)]
+        }
+    }
+
+    private func parseClosePath() -> PathCommand? {
+        // closepath:
+        //     ("Z" | "z")
+        return stream.transaction { () -> PathCommand? in
+            let c = stream.next()
+            guard c == "Z" || c == "z" else {
+                return nil
+            }
+            return PathCommand.ClosePath
+        }
+    }
+
+    private func parseLineTo() -> [PathCommand]? {
+        // lineto:
+        //     ( "L" | "l" ) wsp* lineto-argument-sequence
+        // lineto-argument-sequence:
+        //     coordinate-pair
+        //     | coordinate-pair comma-wsp? lineto-argument-sequence
+        return stream.transaction { () -> [PathCommand]? in
+            let c = stream.next()
+            guard c == "L" || c == "l" else {
+                return nil
+            }
+            let relative = c == "l"
+            let _ = parseWsp()
+
+            return parseArgumentSequence {
+                if let coordinatePair = parseCoordinatePair() {
+                    return PathCommand.LineTo(relative: relative, coordinatePair)
+                }
+                return nil
+            }
+        }
+    }
+
+    private func parseHorizontalLineTo() -> [PathCommand]? {
+        // horizontal-lineto:
+        //     ( "H" | "h" ) wsp* horizontal-lineto-argument-sequence
+        // horizontal-lineto-argument-sequence:
+        //     coordinate
+        //     | coordinate comma-wsp? horizontal-lineto-argument-sequence
+        return stream.transaction { () -> [PathCommand]? in
+            let c = stream.next()
+            guard c == "H" || c == "h" else {
+                return nil
+            }
+            let relative = c == "h"
+            let _ = parseWsp()
+
+            return parseArgumentSequence {
+                if let coordinate = parseCoordinate() {
+                    return PathCommand.HorizontalLineTo(relative: relative, coordinate)
+                }
+                return nil
+            }
+        }
+    }
+
+    private func parseVerticalLineTo() -> [PathCommand]? {
+        // vertical-lineto:
+        //     ( "V" | "v" ) wsp* vertical-lineto-argument-sequence
+        // vertical-lineto-argument-sequence:
+        //     coordinate
+        //     | coordinate comma-wsp? vertical-lineto-argument-sequence
+        return stream.transaction { () -> [PathCommand]? in
+            let c = stream.next()
+            guard c == "V" || c == "v" else {
+                return nil
+            }
+            let relative = c == "v"
+            let _ = parseWsp()
+
+            return parseArgumentSequence {
+                if let coordinate = parseCoordinate() {
+                    return PathCommand.VerticalLineTo(relative: relative, coordinate)
+                }
+                return nil
+            }
+        }
+    }
+
+    private func parseCurveTo() -> [PathCommand]? {
+        // curveto:
+        //     ( "C" | "c" ) wsp* curveto-argument-sequence
+        // curveto-argument-sequence:
+        //     curveto-argument
+        //     | curveto-argument comma-wsp? curveto-argument-sequence
+        // curveto-argument:
+        //     coordinate-pair comma-wsp? coordinate-pair comma-wsp? coordinate-pair
+        return stream.transaction { () -> [PathCommand]? in
+            let c = stream.next()
+            guard c == "C" || c == "c" else {
+                return nil
+            }
+            let relative = c == "c"
+            let _ = parseWsp()
+
+            return parseArgumentSequence {
+                guard let a = parseCoordinatePair() else {
+                    return nil
+                }
+                let _ = parseCommaWsp()
+                guard let b = parseCoordinatePair() else {
+                    return nil
+                }
+                let _ = parseCommaWsp()
+                guard let c = parseCoordinatePair() else {
+                    return nil
+                }
+                return PathCommand.CurveTo(relative: relative, a, b, c)
+            }
+        }
+    }
+
+    private func parseSmoothCurveTo() -> [PathCommand]? {
+        // smooth-curveto:
+        //     ( "S" | "s" ) wsp* smooth-curveto-argument-sequence
+        // smooth-curveto-argument-sequence:
+        //     smooth-curveto-argument
+        //     | smooth-curveto-argument comma-wsp? smooth-curveto-argument-sequence
+        // smooth-curveto-argument:
+        //     coordinate-pair comma-wsp? coordinate-pair
+        return stream.transaction { () -> [PathCommand]? in
+            let c = stream.next()
+            guard c == "S" || c == "s" else {
+                return nil
+            }
+            let relative = c == "s"
+            let _ = parseWsp()
+
+            return parseArgumentSequence {
+                guard let a = parseCoordinatePair() else {
+                    return nil
+                }
+                let _ = parseCommaWsp()
+                guard let b = parseCoordinatePair() else {
+                    return nil
+                }
+                return PathCommand.SmoothCurveTo(relative: relative, a, b)
+            }
+        }
+    }
+
+    private func parseQuadraticBezierCurveTo() -> [PathCommand]? {
+        // quadratic-bezier-curveto:
+        //     ( "Q" | "q" ) wsp* quadratic-bezier-curveto-argument-sequence
+        // quadratic-bezier-curveto-argument-sequence:
+        //     quadratic-bezier-curveto-argument
+        //     | quadratic-bezier-curveto-argument comma-wsp?
+        //         quadratic-bezier-curveto-argument-sequence
+        // quadratic-bezier-curveto-argument:
+        //     coordinate-pair comma-wsp? coordinate-pair
+        return stream.transaction {
+            let c = stream.next()
+            guard c == "Q" || c == "q" else {
+                return nil
+            }
+            let relative = c == "q"
+            let _ = parseWsp()
+
+            return parseArgumentSequence {
+                guard let a = parseCoordinatePair() else {
+                    return nil
+                }
+                let _ = parseCommaWsp()
+                guard let b = parseCoordinatePair() else {
+                    return nil
+                }
+                return PathCommand.QuadraticBezierCurveTo(relative: relative, a, b)
+            }
+        }
+    }
+
+    private func parseSmoothQuadraticBezierCurveTo() -> [PathCommand]? {
+        // smooth-quadratic-bezier-curveto:
+        //     ( "T" | "t" ) wsp* smooth-quadratic-bezier-curveto-argument-sequence
+        // smooth-quadratic-bezier-curveto-argument-sequence:
+        //     coordinate-pair
+        //     | coordinate-pair comma-wsp? smooth-quadratic-bezier-curveto-argument-sequence
+        return stream.transaction {
+            let c = stream.next()
+            guard c == "T" || c == "t" else {
+                return nil
+            }
+            let relative = c == "t"
+            let _ = parseWsp()
+
+            return parseArgumentSequence {
+                guard let coordinatePair = parseCoordinatePair() else {
+                    return nil
+                }
+                return PathCommand.SmoothQuadraticBezierCurveTo(relative: relative, coordinatePair)
+            }
+        }
+    }
+
+    private func parseEllipticalArc() -> [PathCommand]? {
+        // elliptical-arc:
+        //     ( "A" | "a" ) wsp* elliptical-arc-argument-sequence
+        // elliptical-arc-argument-sequence:
+        //     elliptical-arc-argument
+        //     | elliptical-arc-argument comma-wsp? elliptical-arc-argument-sequence
+        // elliptical-arc-argument:
+        //     nonnegative-number comma-wsp? nonnegative-number comma-wsp?
+        //         number comma-wsp flag comma-wsp? flag comma-wsp? coordinate-pair
+        return stream.transaction {
+            let c = stream.next()
+            guard c == "A" || c == "a" else {
+                return nil
+            }
+            let relative = c == "a"
+            let _ = parseWsp()
+
+            return parseArgumentSequence {
+                guard let rx = parseNonNegativeNumber() else {
+                    return nil
+                }
+                let _ = parseCommaWsp()
+                guard let ry = parseNonNegativeNumber() else {
+                    return nil
+                }
+                let radius = CoordinatePair(x: rx, y: ry)
+                let _ = parseCommaWsp()
+                guard let angle = parseNumber() else {
+                    return nil
+                }
+                let _ = parseCommaWsp()
+                guard let largeArc = parseFlag() else {
+                    return nil
+                }
+                let _ = parseCommaWsp()
+                guard let sweep = parseFlag() else {
+                    return nil
+                }
+                let _ = parseCommaWsp()
+                guard let coordinatePair = parseCoordinatePair() else {
+                    return nil
+                }
+
+                return PathCommand.EllipticalArc(relative: relative, radius: radius, xAxisRotation: angle, largeArc: largeArc, sweep: sweep, to: coordinatePair)
+            }
+        }
+    }
+
+    private func parseArgumentSequence(parseArgument: () -> (PathCommand?)) -> [PathCommand]? {
+        // Non-spec helper. Almost all commands are defined with:
+        // foo:
+        //     "f" wsp* foo-argument-sequence
+        // foo-argument-sequence:
+        //     coordinate
+        //     | coordinate comma-wsp? foo-argument-sequence
+        // ...so, this wraps that behaviour up.
+        return stream.transaction {
+            var commands: [PathCommand] = []
+            guard let first = parseArgument() else {
+                return nil
+            }
+            commands.append(first)
 
             while true {
-                let coordinatePair = stream.transaction {
-                    let _ = parseWsp()
-                    return parseCoordinatePair()
+                let next = stream.transaction {
+                    let _ = parseCommaWsp()
+                    return parseArgument()
                 }
-                guard let coordinatePair else {
+                guard let next else {
                     break
                 }
-                moveToCommands.append(PathCommand.Move(relative: relative, coordinatePair))
+                commands.append(next)
             }
 
-            return moveToCommands
+            return commands
         }
     }
 

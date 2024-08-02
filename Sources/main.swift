@@ -1,6 +1,11 @@
-if let path = PathParser.parsePath(from: "M100.4-200e1m1 2 3 4m") {
-    print("Parsed a path, length \(path.length)")
-    print(path.dump())
+if CommandLine.arguments.count < 2 {
+    print("Usage: \(CommandLine.arguments[0]) <svg-path-string>")
 } else {
-    print("Failed to parse path")
+    let pathString = CommandLine.arguments[1]
+    if let path = PathParser.parsePath(from: pathString) {
+        print("Parsed a path, length \(path.length)")
+        print(path.dump())
+    } else {
+        print("Failed to parse path")
+    }
 }
